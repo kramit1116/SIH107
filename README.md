@@ -82,6 +82,7 @@ Settings live in `config.yaml`; `BIS_<SECTION>_<KEY>` environment variables win.
 | `BIS_LLM_PROVIDER` | `openai-compatible` | `openai-compatible`, `ollama`, `gemini` or `anthropic` |
 | `BIS_LLM_MODEL` | empty | model id; empty means the chatbot is offline |
 | `BIS_LLM_API_KEY` | empty | cloud API key (keep it in `.env`) |
+| `BIS_LLM_FALLBACK_API_KEYS` | empty | comma-separated backup keys, tried in order after the primary fails; rejected/rate-limited keys immediately move to the next key |
 | `BIS_LLM_BASE_URL` | provider default | e.g. `https://api.groq.com/openai/v1` |
 | `BIS_LLM_FALLBACK_MODEL` | empty | same-provider model used when the main one is rate limited or failing |
 | `BIS_LLM_UTILITY_MODEL` | empty | small model for query rewrites and chat titles |
