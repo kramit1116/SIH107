@@ -13,6 +13,7 @@ Switches:
   BIS_LLM_MODEL=""                e.g. gpt-4o-mini / gemini-2.0-flash / llama3
   BIS_LLM_PROVIDER="openai-compatible"  openai-compatible | gemini | ollama | anthropic
   BIS_LLM_API_KEY=""              never hard-code; env/config only
+  BIS_LLM_FALLBACK_API_KEYS=""     comma-separated backup keys, tried in order
   BIS_LLM_BASE_URL="https://api.openai.com/v1"  provider-specific local/cloud endpoint
   BIS_LLM_TEMPERATURE=0.2
   BIS_LLM_MAX_TOKENS=768
@@ -131,10 +132,17 @@ def load_llm_config() -> dict:
         base = str(file_cfg.get("base_url", _OPENAI_DEFAULT))
     else:
         base = _PROVIDER_DEFAULTS[provider]
+    primary_key = os.environ.get("BIS_LLM_API_KEY", str(file_cfg.get("api_key", ""))).strip()
+    fallback_keys = os.environ.get("BIS_LLM_FALLBACK_API_KEYS", file_cfg.get("fallback_api_keys", []))
+    if isinstance(fallback_keys, str):
+        fallback_keys = fallback_keys.split(",")
+    api_keys = list(dict.fromkeys(
+        key.strip() for key in [primary_key, *fallback_keys] if key.strip()))
     return {
         "provider": provider,
         "model": os.environ.get("BIS_LLM_MODEL", str(file_cfg.get("model", ""))),
-        "api_key": os.environ.get("BIS_LLM_API_KEY", str(file_cfg.get("api_key", ""))),
+        "api_key": api_keys[0] if api_keys else "",
+        "api_keys": api_keys,
         "base_url": base.rstrip("/"),
         "temperature": _float_env(
             "BIS_LLM_TEMPERATURE", float(file_cfg.get("temperature", 0.2))),

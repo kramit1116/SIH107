@@ -383,7 +383,8 @@ _SENDERS = {
 }
 
 
-def _attempts(messages: list[dict], cfg: dict, sender, attempts: int) -> tuple[str | None, str]:
+def _attempts(messages: list[dict], cfg: dict, sender, attempts: int,
+              next_key_available: bool = False) -> tuple[str | None, str]:
     failure = "empty_response"
     for attempt in range(attempts):
         try:
@@ -393,6 +394,10 @@ def _attempts(messages: list[dict], cfg: dict, sender, attempts: int) -> tuple[s
             failure = "empty_response"
         except urllib.error.HTTPError as exc:
             failure = f"http_{exc.code}"
+            # Try the next credential immediately rather than retrying a
+            # rejected or rate-limited key on an interactive request.
+            if next_key_available and exc.code in (401, 403, 429):
+                break
             delay = _retry_delay(exc, attempt)
             if attempt + 1 >= attempts or delay is None:
                 break
@@ -408,8 +413,25 @@ def _attempts(messages: list[dict], cfg: dict, sender, attempts: int) -> tuple[s
     return None, failure
 
 
+def _attempt_keys(messages: list[dict], cfg: dict, sender,
+                  attempts: int) -> tuple[str | None, str]:
+    keys = list(dict.fromkeys(
+        key for key in [cfg.get("api_key", ""), *cfg.get("api_keys", [])] if key)) or [""]
+    failure = "empty_response"
+    for index, key in enumerate(keys):
+        text, failure = _attempts(
+            messages, {**cfg, "api_key": key}, sender, attempts,
+            next_key_available=index + 1 < len(keys))
+        if text:
+            return text, ""
+        # A malformed request will fail with every credential.
+        if failure == "http_400":
+            break
+    return None, failure
+
+
 def chat_complete(messages: list[dict], cfg: dict | None = None) -> str | None:
-    """Provider-dispatched chat call with retries and a fallback model.
+    """Provider-dispatched chat call with key failover, retries and a fallback model.
 
     Returns None on failure; ``last_failure()`` then gives the reason
     (``http_429``, ``transport_error`` ...). Empty responses consume an
@@ -429,14 +451,14 @@ def chat_complete(messages: list[dict], cfg: dict | None = None) -> str | None:
         _state.failure = "not_configured"
         return None
     attempts = 1 + max(0, int(cfg.get("retries", 0)))
-    text, failure = _attempts(messages, cfg, sender, attempts)
+    text, failure = _attempt_keys(messages, cfg, sender, attempts)
     if text:
         return text
     fallback = str(cfg.get("fallback_model") or "").strip()
     if fallback and fallback != cfg.get("model") and failure != "http_400":
         log.info("LLM primary failed; trying fallback model",
                  extra={"ctx": {"provider": provider, "reason": failure}})
-        text, fallback_failure = _attempts(
+        text, fallback_failure = _attempt_keys(
             messages, {**cfg, "model": fallback}, sender, 1)
         if text:
             return text
@@ -535,11 +557,19 @@ def transcribe_audio(data: bytes, mime: str = "audio/webm",
         text = _transcribe_gemini(data, mime, cfg)
         if text:
             return text
-    groq_key = os.environ.get("GROQ_API_KEY", "").strip()
-    if groq_key:
-        text = _transcribe_groq(data, mime, groq_key)
-        if text:
-            return text
+    groq_keys = [os.environ.get("GROQ_API_KEY", "").strip()]
+    if urlparse(str(cfg.get("base_url", ""))).hostname == "api.groq.com":
+        groq_keys.extend([cfg.get("api_key", ""), *cfg.get("api_keys", [])])
+    for key in dict.fromkeys(key for key in groq_keys if key):
+        try:
+            text = _transcribe_groq(data, mime, key)
+            if text:
+                return text
+        except urllib.error.HTTPError as exc:
+            if exc.code == 400:
+                break
+        except Exception:
+            continue
     return None
 
 
